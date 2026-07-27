@@ -1,17 +1,22 @@
 {
-    "format_version":2,
-    "header":{
-        "name": "Pulse",
-        "description":"Bring the pulse to minecraft",
-        "uuid":"f3ef61e0-0269-4957-8fd2-d97273696d2c",
-        "version":[1,0,0],
-        "min_engine_version":[1,21,0]
-    },
-    "modules":[
-        {
-            "type":"data",
-            "uuid":"f31cceae-d527-49b4-a198-3a3a0871aea8",
-            "version":[1,0,0]
-        }
-    ]
+  "format_version": 2,
+  "header": {
+    "name": "Custom Dimension Pack",
+    "min_engine_version": [1, 21, 80]
+  },
+  "modules": [
+    {
+      "type": "script",
+      "language": "javascript",
+      "entry": "scripts/main.js",
+      "version": [1, 0, 0],
+      "uuid": "8c92041b-178d-40a7-ae82-3146e7090486"
+    }
+  ],
+  "dependencies": [
+    {
+      "module_name": "@minecraft/server",
+      "version": "beta"
+    }
+  ]
 }
