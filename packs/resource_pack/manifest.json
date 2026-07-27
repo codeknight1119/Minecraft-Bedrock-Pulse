@@ -1,0 +1,17 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "Pulse Resource Pack",
+    "description": "Resources for the Pulse custom dimension add-on",
+    "uuid": "6f5ba441-8d1e-4caa-9c74-6b7dd5bf05af",
+    "version": [1, 0, 0],
+    "min_engine_version": [1, 20, 0]
+  },
+  "modules": [
+    {
+      "type": "resources",
+      "uuid": "b18d0e57-dc59-4cb1-ab8c-03ec63d4c0c7",
+      "version": [1, 0, 0]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "Pulse Behavior Pack",
+    "description": "Adds a custom dimension and startup script",
+    "uuid": "d10f95ca-7246-4d18-8b7d-57d7be8f00d4",
+    "version": [1, 0, 0],
+    "min_engine_version": [1, 20, 0]
+  },
+  "modules": [
+    {
+      "type": "script",
+      "language": "javascript",
+      "entry": "scripts/main.js",
+      "uuid": "cf149f0d-7f97-4aed-96c2-74d4d1ff03a2",
+      "version": [1, 0, 0]
+    }
+  ],
+  "dependencies": [
+    {
+      "module_name": "@minecraft/server",
+      "version": "beta"
+    },
+    {
+      "uuid": "6f5ba441-8d1e-4caa-9c74-6b7dd5bf05af",
+      "version": [1, 0, 0]
+    }
+  ]
+}
