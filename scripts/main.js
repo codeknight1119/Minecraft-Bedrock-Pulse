@@ -7,15 +7,31 @@ system.beforeEvents.startup.subscribe((event) => {
     event.dimensionRegistry.registerCustomDimension(DIMENSION_ID);
 });
 
-// 2. Generate the platform when a player enters the dimension
+// 2. Generate the platform with a retry mechanism
 world.afterEvents.playerDimensionChange.subscribe((event) => {
     if (event.toDimension.id === DIMENSION_ID) {
-        // Wait 10 ticks (half a second) to ensure the chunk has fully loaded
-        system.runTimeout(() => {
+        
+        let attempts = 0;
+        
+        // Create an interval that runs every 10 ticks (0.5 seconds)
+        const intervalId = system.runInterval(() => {
+            attempts++;
+            
             try {
+                // Try to build the platform
                 event.toDimension.runCommand("fill -2 100 -2 2 100 2 stone");
+                
+                // If the command succeeds (chunk is loaded), stop the loop!
+                system.clearRun(intervalId);
+                
             } catch (error) {
-                console.warn("Failed to generate platform: " + error);
+                // If it fails (chunk not loaded yet), it will catch the error and try again next tick
+                
+                // Safety net: stop trying after 20 attempts (10 seconds) so it doesn't loop forever
+                if (attempts >= 20) {
+                    system.clearRun(intervalId);
+                    console.warn("Failed to generate platform after 10 seconds.");
+                }
             }
         }, 10);
     }
