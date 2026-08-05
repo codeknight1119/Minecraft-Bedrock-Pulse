@@ -2,25 +2,24 @@
   "format_version": 2,
   "header": {
     "name": "Custom Dimension Pack",
-    "min_engine_version": [1, 21, 80]
+    "description": "Registers a basic custom dimension.",
+    "uuid": "f32ef624-eb6f-4e76-9960-084d133d0d01",
+    "version": [1, 0, 0],
+    "min_engine_version": [1, 21, 0]
   },
   "modules": [
     {
       "type": "script",
       "language": "javascript",
       "entry": "scripts/main.js",
-      "version": [1, 0, 0],
-      "uuid": "..."
+      "uuid": "70312ea6-33b0-4281-8744-183d4644ca20",
+      "version": [1, 0, 0]
     }
   ],
   "dependencies": [
     {
       "module_name": "@minecraft/server",
       "version": "beta"
-    },
-    {
-      "module_name": "@minecraft/server-ui",
-      "version": "2.0.0"
     }
   ]
 }
