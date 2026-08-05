@@ -1,0 +1,31 @@
+{
+  "format_version": "1.21.0",
+  "minecraft:biome": {
+    "description": {
+      "identifier": "custom:crystal_wasteland"
+    },
+    "components": {
+      "minecraft:climate": {
+        "temperature": 0.5,
+        "downfall": 0.0,
+        "snow_accumulation": [0.0, 0.0]
+      },
+      "minecraft:overworld_generation_rules": {
+        "generate_for_climates": [
+          [ "medium", 100 ]
+        ]
+      },
+      "minecraft:surface_parameters": {
+        "top_material": "minecraft:grass_block",
+        "mid_material": "minecraft:dirt",
+        "sea_floor_material": "minecraft:gravel",
+        "foundation_material": "minecraft:stone",
+        "sea_level": 63
+      },
+      "minecraft:map_tints": {
+        "grass": "#A020F0",
+        "foliage": "#A020F0"
+      }
+    }
+  }
+}
