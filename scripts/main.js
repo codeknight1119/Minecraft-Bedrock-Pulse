@@ -2,59 +2,35 @@ import { system, world } from "@minecraft/server";
 
 const DIMENSION_ID = "custom:my_dimension";
 
-// Tracking generated chunks ("chunkX,chunkZ") so we never overwrite land
+// Generation Settings
+const GENERATION_RADIUS = 2; // Chunks around the player (2 = 5x5 chunk grid around player)
+const TASKS_PER_TICK = 8;     // Column fill commands per tick (lower = smoother, higher = faster)
+
 const generatedChunks = new Set();
-
-// Task queue for time-slicing work across server ticks
 const taskQueue = [];
-
-// How many block column tasks to process PER TICK (adjust to balance speed vs lag)
-const TASKS_PER_TICK = 8; 
 
 // 1. Register custom dimension on startup
 system.beforeEvents.startup.subscribe((event) => {
     event.dimensionRegistry.registerCustomDimension(DIMENSION_ID);
 });
 
-// 2. The Time-Sliced Queue Worker (Runs every tick)
-system.runInterval(() => {
-    if (taskQueue.length === 0) return;
-
-    const dim = world.getDimension(DIMENSION_ID);
-
-    // Process a small batch of tasks this tick to prevent lagging the server
-    for (let i = 0; i < TASKS_PER_TICK && taskQueue.length > 0; i++) {
-        const task = taskQueue.shift(); // Remove the next task from the front
-
-        try {
-            // Fill stone underneath the surface
-            dim.runCommand(`fill ${task.x} 0 ${task.z} ${task.x} ${task.height - 1} ${task.z} stone`);
-            // Fill surface grass block
-            dim.runCommand(`setblock ${task.x} ${task.height} ${task.z} grass_block`);
-        } catch (error) {
-            // If command fails (chunk unloaded), skip gracefully
-        }
-    }
-}, 1);
-
-// 3. Helper: Converts chunk coordinates to individual column tasks
+// 2. Helper: Queue a chunk if it hasn't been created yet
 function queueChunkForGeneration(chunkX, chunkZ) {
     const chunkKey = `${chunkX},${chunkZ}`;
 
-    // Overwrite check: If already generated, abort immediately
+    // Overwrite Prevention: Skip if chunk was already built
     if (generatedChunks.has(chunkKey)) return;
     generatedChunks.add(chunkKey);
 
     const startX = chunkX * 16;
     const startZ = chunkZ * 16;
 
-    // Break 16x16 chunk into 256 column tasks
     for (let x = 0; x < 16; x++) {
         for (let z = 0; z < 16; z++) {
             const worldX = startX + x;
             const worldZ = startZ + z;
 
-            // Simple wave function math placeholder until we add real Perlin noise
+            // Simple height math placeholder
             const height = 65 + Math.floor(Math.sin(worldX * 0.1) * 4 + Math.cos(worldZ * 0.1) * 4);
 
             taskQueue.push({ x: worldX, z: worldZ, height: height });
@@ -62,14 +38,39 @@ function queueChunkForGeneration(chunkX, chunkZ) {
     }
 }
 
-// 4. Trigger chunk generation when player enters the dimension
-world.afterEvents.playerDimensionChange.subscribe((event) => {
-    if (event.toDimension.id === DIMENSION_ID) {
-        // Queue spawn chunks (Chunk 0,0 and surrounding chunks)
-        for (let cx = -1; cx <= 1; cx++) {
-            for (let cz = -1; cz <= 1; cz++) {
+// 3. Dynamic Player Scanner (Runs every 10 ticks / 0.5s)
+system.runInterval(() => {
+    const dim = world.getDimension(DIMENSION_ID);
+    const players = dim.getPlayers();
+
+    for (const player of players) {
+        // Convert player's X and Z coordinates to Chunk coordinates
+        const playerChunkX = Math.floor(player.location.x / 16);
+        const playerChunkZ = Math.floor(player.location.z / 16);
+
+        // Scan all neighbor chunks within the generation radius
+        for (let cx = playerChunkX - GENERATION_RADIUS; cx <= playerChunkX + GENERATION_RADIUS; cx++) {
+            for (let cz = playerChunkZ - GENERATION_RADIUS; cz <= playerChunkZ + GENERATION_RADIUS; cz++) {
                 queueChunkForGeneration(cx, cz);
             }
         }
     }
-});
+}, 10);
+
+// 4. Time-Sliced Task Queue Worker (Runs every tick)
+system.runInterval(() => {
+    if (taskQueue.length === 0) return;
+
+    const dim = world.getDimension(DIMENSION_ID);
+
+    for (let i = 0; i < TASKS_PER_TICK && taskQueue.length > 0; i++) {
+        const task = taskQueue.shift();
+
+        try {
+            dim.runCommand(`fill ${task.x} 0 ${task.z} ${task.x} ${task.height - 1} ${task.z} stone`);
+            dim.runCommand(`setblock ${task.x} ${task.height} ${task.z} grass_block`);
+        } catch (error) {
+            // Fails silently if chunk isn't loaded into memory yet
+        }
+    }
+}, 1);
