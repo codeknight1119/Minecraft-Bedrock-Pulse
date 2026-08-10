@@ -1,24 +1,30 @@
 import { system, world } from "@minecraft/server";
 
 /*
- * Pulse Custom Dimension Generator
+ * ============================================================================
+ * PULSE CUSTOM DIMENSION GENERATOR
+ * ============================================================================
  *
- * The custom dimension is registered as a void dimension.
- * This script procedurally builds terrain around players.
+ * The custom dimension itself is a void dimension.
+ * This script generates terrain around players.
  *
- * Architecture:
- *   player tracking
- *        ↓
- *   chunk queue
- *        ↓
- *   nearest chunks first
- *        ↓
- *   one chunk generated at a time
- *        ↓
- *   chunk marked complete
+ * Generation pipeline:
  *
- * This is intentionally written so the terrain-generation function can
- * eventually be replaced with a proper noise/biome system.
+ *     DISCOVER
+ *        ↓
+ *      QUEUED
+ *        ↓
+ *      LOADING
+ *        ↓
+ *      WAITING
+ *        ↓
+ *    GENERATING
+ *        ↓
+ *    VERIFYING
+ *        ↓
+ *    GENERATED
+ *
+ * Failed chunks are returned to the queue and retried.
  */
 
 // ============================================================================
@@ -27,141 +33,152 @@ import { system, world } from "@minecraft/server";
 
 const DIMENSION_ID = "custom:my_dimension";
 
-// How many chunks away from each player should be generated.
-//
-// 3 = 7x7 chunks around the player.
+/*
+ * How far ahead of players to generate.
+ *
+ * 3 = 7x7 chunks.
+ */
 const GENERATION_RADIUS = 3;
 
-// How often we check player positions.
-// 10 ticks = 0.5 seconds.
+/*
+ * How frequently player positions are scanned.
+ *
+ * 10 ticks = 0.5 seconds.
+ */
 const PLAYER_SCAN_INTERVAL = 10;
 
-// Maximum number of chunks generated during one worker run.
-//
-// Keep this low while testing. Terrain generation can be expensive.
-const CHUNKS_PER_TICK = 1;
+/*
+ * How many terrain rows are generated per tick.
+ *
+ * A chunk has 16 rows.
+ *
+ * Smaller values are slower but significantly safer.
+ */
+const ROWS_PER_TICK = 2;
 
-// Terrain settings.
+/*
+ * Number of ticks to wait after creating the ticking area before
+ * touching blocks.
+ */
+const CHUNK_LOAD_WAIT_TICKS = 3;
+
+/*
+ * Number of ticks to wait before verifying a finished chunk.
+ */
+const VERIFY_WAIT_TICKS = 2;
+
+/*
+ * Number of attempts before we temporarily give up on a chunk.
+ *
+ * The chunk can still be rediscovered later.
+ */
+const MAX_GENERATION_ATTEMPTS = 5;
+
+// ============================================================================
+// TERRAIN SETTINGS
+// ============================================================================
+
 const BASE_HEIGHT = 64;
 const MIN_HEIGHT = 56;
 const MAX_HEIGHT = 72;
 
-// Temporary ticking area used while generating a chunk.
-//
-// We intentionally reuse ONE ticking area rather than creating one for
-// every chunk.
-const TICKING_AREA_NAME = "pulse_generation";
-
 // ============================================================================
-// STATE
+// GENERATOR STATE
 // ============================================================================
 
 /*
- * Chunk states:
+ * Chunk state map.
+ *
+ * Possible states:
  *
  *   queued
+ *   loading
+ *   waiting
  *   generating
+ *   verifying
  *   generated
- *
- * A Map is used instead of a Set because "queued" and "generated" are
- * different states.
  */
 const chunkStates = new Map();
 
 /*
- * Generation queue.
- *
- * Entries look like:
- *
- * {
- *     x: chunkX,
- *     z: chunkZ,
- *     key: "x,z"
- * }
+ * Chunks waiting to be processed.
  */
 const generationQueue = [];
 
-// Whether our temporary ticking area currently exists.
+/*
+ * The chunk currently being processed.
+ *
+ * We deliberately generate ONLY ONE chunk at a time.
+ */
+let activeChunk = null;
+
+/*
+ * We reuse a single ticking area.
+ */
+const TICKING_AREA_NAME = "pulse_generator_area";
+
 let tickingAreaActive = false;
 
 // ============================================================================
 // CHUNK UTILITIES
 // ============================================================================
 
-/**
- * Creates a unique key for a chunk.
- */
-function getChunkKey(chunkX, chunkZ) {
+function chunkKey(chunkX, chunkZ) {
     return `${chunkX},${chunkZ}`;
 }
 
-/**
- * Converts a world coordinate into a chunk coordinate.
- *
- * Math.floor is important here because it correctly handles negative
- * coordinates.
- *
- * Example:
- *
- *   x = 0    → chunk 0
- *   x = 15   → chunk 0
- *   x = 16   → chunk 1
- *   x = -1   → chunk -1
- */
 function worldToChunk(value) {
     return Math.floor(value / 16);
 }
 
-/**
- * Gets the world coordinate of the beginning of a chunk.
- */
-function chunkToWorld(chunkCoordinate) {
-    return chunkCoordinate * 16;
+function chunkToWorld(value) {
+    return value * 16;
 }
 
 /**
- * Queue a chunk for generation.
- *
- * Returns true if the chunk was newly queued.
+ * Add a chunk to the generation queue.
  */
 function queueChunk(chunkX, chunkZ) {
-    const key = getChunkKey(chunkX, chunkZ);
 
-    // Already queued, generating, or generated.
+    const key = chunkKey(
+        chunkX,
+        chunkZ
+    );
+
+    /*
+     * Don't queue anything that already has a state.
+     */
     if (chunkStates.has(key)) {
         return false;
     }
 
-    chunkStates.set(key, "queued");
+    chunkStates.set(
+        key,
+        "queued"
+    );
 
     generationQueue.push({
         x: chunkX,
         z: chunkZ,
         key,
+        attempts: 0
     });
 
     return true;
 }
 
 // ============================================================================
-// TERRAIN GENERATION
+// TERRAIN
 // ============================================================================
 
 /**
- * Returns the terrain height at a world coordinate.
+ * Deterministic terrain-height function.
  *
- * THIS IS THE PART WE CAN EVENTUALLY REPLACE WITH REAL TERRAIN GENERATION.
- *
- * Right now it uses several sine/cosine waves to make a simple rolling
- * landscape.
- *
- * The important thing is that the function is deterministic:
- *
- *   getTerrainHeight(100, 200)
- *
- * will always return the same value.
+ * This is deliberately isolated so we can later replace it with proper
+ * terrain noise / biome generation.
  */
 function getTerrainHeight(x, z) {
+
     const largeScale =
         Math.sin(x * 0.045) * 5;
 
@@ -181,111 +198,62 @@ function getTerrainHeight(x, z) {
 
     return Math.max(
         MIN_HEIGHT,
-        Math.min(MAX_HEIGHT, height)
-    );
-}
-
-/**
- * Generate a single chunk.
- *
- * This generates all 256 columns belonging to the chunk.
- *
- * Unlike the old implementation, the queue contains ONE task per chunk
- * instead of 256 tasks per chunk.
- */
-function generateChunk(dimension, chunkX, chunkZ) {
-    const startX = chunkToWorld(chunkX);
-    const startZ = chunkToWorld(chunkZ);
-
-    for (let localX = 0; localX < 16; localX++) {
-        for (let localZ = 0; localZ < 16; localZ++) {
-
-            const worldX = startX + localX;
-            const worldZ = startZ + localZ;
-
-            const height = getTerrainHeight(
-                worldX,
-                worldZ
-            );
-
-            generateColumn(
-                dimension,
-                worldX,
-                worldZ,
-                height
-            );
-        }
-    }
-}
-
-/**
- * Generate one terrain column.
- *
- * Current terrain:
- *
- *   stone
- *   stone
- *   stone
- *   dirt
- *   dirt
- *   grass
- */
-function generateColumn(
-    dimension,
-    x,
-    z,
-    height
-) {
-    // Make the underground.
-    if (height > BASE_HEIGHT) {
-        dimension.runCommand(
-            `fill ${x} ${BASE_HEIGHT} ${z} ${x} ${height - 2} ${z} stone`
-        );
-    }
-
-    // Dirt layer.
-    if (height >= BASE_HEIGHT + 2) {
-        dimension.runCommand(
-            `fill ${x} ${height - 2} ${z} ${x} ${height - 1} ${z} dirt`
-        );
-    }
-
-    // Grass surface.
-    dimension.runCommand(
-        `setblock ${x} ${height} ${z} grass_block`
+        Math.min(
+            MAX_HEIGHT,
+            height
+        )
     );
 }
 
 // ============================================================================
-// TICKING AREA
+// TICKING AREA MANAGEMENT
 // ============================================================================
 
-/**
- * Create the temporary ticking area for a chunk.
- *
- * We reuse the same name every time.
- */
-function startChunkLoading(
+function removeTickingArea(dimension) {
+
+    if (!tickingAreaActive) {
+        return;
+    }
+
+    try {
+
+        dimension.runCommand(
+            `tickingarea remove ${TICKING_AREA_NAME}`
+        );
+
+    } catch {
+        /*
+         * It may already have been removed.
+         */
+    }
+
+    tickingAreaActive = false;
+}
+
+function createTickingArea(
     dimension,
     chunkX,
     chunkZ
 ) {
+
+    /*
+     * Always clean up the previous area first.
+     */
+    removeTickingArea(
+        dimension
+    );
+
     const centerX =
         chunkToWorld(chunkX) + 8;
 
     const centerZ =
         chunkToWorld(chunkZ) + 8;
 
-    /*
-     * Remove an old generation area first.
-     *
-     * This prevents stale areas from surviving if generation failed.
-     */
-    if (tickingAreaActive) {
-        stopChunkLoading(dimension);
-    }
-
     try {
+
+        /*
+         * Radius 0 = the chunk containing the center.
+         */
         dimension.runCommand(
             `tickingarea add circle ${centerX} 64 ${centerZ} 0 ${TICKING_AREA_NAME}`
         );
@@ -293,250 +261,520 @@ function startChunkLoading(
         tickingAreaActive = true;
 
         return true;
+
     } catch (error) {
+
         console.warn(
-            `[Pulse] Could not create generation ticking area: ${error}`
+            `[Pulse] Failed to create ticking area for ${chunkX},${chunkZ}: ${error}`
         );
 
         return false;
     }
 }
 
+// ============================================================================
+// CHUNK GENERATION
+// ============================================================================
+
 /**
- * Remove the temporary ticking area.
+ * Generate one horizontal row of a chunk.
+ *
+ * We do NOT generate all 256 columns at once.
  */
-function stopChunkLoading(dimension) {
-    if (!tickingAreaActive) {
+function generateChunkRow(
+    dimension,
+    chunk,
+    localZ
+) {
+
+    const startX =
+        chunkToWorld(chunk.x);
+
+    const startZ =
+        chunkToWorld(chunk.z);
+
+    const worldZ =
+        startZ + localZ;
+
+    for (
+        let localX = 0;
+        localX < 16;
+        localX++
+    ) {
+
+        const worldX =
+            startX + localX;
+
+        const height =
+            getTerrainHeight(
+                worldX,
+                worldZ
+            );
+
+        /*
+         * Stone core.
+         */
+        if (
+            height > BASE_HEIGHT
+        ) {
+
+            dimension.runCommand(
+                `fill ${worldX} ${BASE_HEIGHT} ${worldZ} ${worldX} ${height - 3} ${worldZ} stone`
+            );
+        }
+
+        /*
+         * Dirt layer.
+         */
+        dimension.runCommand(
+            `fill ${worldX} ${height - 2} ${worldZ} ${worldX} ${height - 1} ${worldZ} dirt`
+        );
+
+        /*
+         * Grass surface.
+         */
+        dimension.runCommand(
+            `setblock ${worldX} ${height} ${worldZ} grass_block`
+        );
+    }
+}
+
+// ============================================================================
+// CHUNK VERIFICATION
+// ============================================================================
+
+/**
+ * Verify that the chunk actually contains terrain.
+ *
+ * We intentionally check a few points instead of scanning the entire chunk.
+ */
+function verifyChunk(
+    dimension,
+    chunk
+) {
+
+    const startX =
+        chunkToWorld(chunk.x);
+
+    const startZ =
+        chunkToWorld(chunk.z);
+
+    const testPoints = [
+        [0, 0],
+        [8, 0],
+        [15, 0],
+        [0, 8],
+        [8, 8],
+        [15, 8],
+        [0, 15],
+        [8, 15],
+        [15, 15]
+    ];
+
+    let validPoints = 0;
+
+    for (
+        const [localX, localZ]
+        of testPoints
+    ) {
+
+        const x =
+            startX + localX;
+
+        const z =
+            startZ + localZ;
+
+        const expectedHeight =
+            getTerrainHeight(
+                x,
+                z
+            );
+
+        try {
+
+            const block =
+                dimension.getBlock({
+                    x,
+                    y: expectedHeight,
+                    z
+                });
+
+            if (
+                block &&
+                block.typeId ===
+                "minecraft:grass_block"
+            ) {
+
+                validPoints++;
+            }
+
+        } catch {
+            /*
+             * Chunk isn't available yet.
+             */
+        }
+    }
+
+    /*
+     * Require most of the test points to exist.
+     */
+    return validPoints >= 7;
+}
+
+// ============================================================================
+// ACTIVE CHUNK PROCESSOR
+// ============================================================================
+
+function beginNextChunk(dimension) {
+
+    if (activeChunk !== null) {
         return;
     }
 
-    try {
-        dimension.runCommand(
-            `tickingarea remove ${TICKING_AREA_NAME}`
-        );
-    } catch {
-        // It may already have disappeared.
-    }
-
-    tickingAreaActive = false;
-}
-
-// ============================================================================
-// QUEUE PRIORITIZATION
-// ============================================================================
-
-/**
- * Calculate the squared distance between two chunks.
- *
- * We use squared distance because we don't need an actual square root.
- */
-function chunkDistanceSquared(
-    chunkX,
-    chunkZ,
-    playerChunkX,
-    playerChunkZ
-) {
-    const dx =
-        chunkX - playerChunkX;
-
-    const dz =
-        chunkZ - playerChunkZ;
-
-    return (
-        dx * dx +
-        dz * dz
-    );
-}
-
-/**
- * Sort the queue so chunks closest to players are generated first.
- */
-function prioritizeQueue(dimension) {
-    const players =
-        dimension.getPlayers();
-
     if (
-        players.length === 0 ||
-        generationQueue.length < 2
+        generationQueue.length === 0
     ) {
         return;
     }
 
-    generationQueue.sort((a, b) => {
+    /*
+     * Take the first chunk in the queue.
+     */
+    const chunk =
+        generationQueue.shift();
 
-        let distanceA = Infinity;
-        let distanceB = Infinity;
+    if (!chunk) {
+        return;
+    }
 
-        for (const player of players) {
+    /*
+     * It may have been generated while waiting.
+     */
+    if (
+        chunkStates.get(
+            chunk.key
+        ) !== "queued"
+    ) {
+        return;
+    }
 
-            const playerChunkX =
-                worldToChunk(
-                    player.location.x
-                );
+    activeChunk = {
+        ...chunk,
 
-            const playerChunkZ =
-                worldToChunk(
-                    player.location.z
-                );
+        attempts:
+            chunk.attempts + 1,
 
-            distanceA = Math.min(
-                distanceA,
-                chunkDistanceSquared(
-                    a.x,
-                    a.z,
-                    playerChunkX,
-                    playerChunkZ
-                )
-            );
+        waitTicks: 0,
 
-            distanceB = Math.min(
-                distanceB,
-                chunkDistanceSquared(
-                    b.x,
-                    b.z,
-                    playerChunkX,
-                    playerChunkZ
-                )
-            );
-        }
+        verifyTicks: 0,
 
-        return distanceA - distanceB;
-    });
+        nextRow: 0
+    };
+
+    chunkStates.set(
+        chunk.key,
+        "loading"
+    );
+
+    /*
+     * Start loading the chunk.
+     */
+    if (
+        !createTickingArea(
+            dimension,
+            chunk.x,
+            chunk.z
+        )
+    ) {
+
+        failActiveChunk(
+            dimension,
+            "Could not create ticking area"
+        );
+
+        return;
+    }
+
+    /*
+     * Move into the explicit waiting state.
+     */
+    chunkStates.set(
+        chunk.key,
+        "waiting"
+    );
+}
+
+// ============================================================================
+// FAILURE / RETRY
+// ============================================================================
+
+function failActiveChunk(
+    dimension,
+    reason
+) {
+
+    if (!activeChunk) {
+        return;
+    }
+
+    const chunk =
+        activeChunk;
+
+    console.warn(
+        `[Pulse] Chunk ${chunk.key} failed: ${reason}`
+    );
+
+    removeTickingArea(
+        dimension
+    );
+
+    activeChunk = null;
+
+    /*
+     * Retry unless we've failed too many times.
+     */
+    if (
+        chunk.attempts <
+        MAX_GENERATION_ATTEMPTS
+    ) {
+
+        chunkStates.delete(
+            chunk.key
+        );
+
+        generationQueue.push({
+            ...chunk,
+            nextRow: 0
+        });
+
+        chunkStates.set(
+            chunk.key,
+            "queued"
+        );
+
+        console.warn(
+            `[Pulse] Retrying ${chunk.key} (${chunk.attempts}/${MAX_GENERATION_ATTEMPTS})`
+        );
+
+    } else {
+
+        /*
+         * Don't permanently mark it generated.
+         *
+         * Delete the state so the normal player scanner can discover it
+         * again later.
+         */
+        chunkStates.delete(
+            chunk.key
+        );
+
+        console.warn(
+            `[Pulse] Giving up on ${chunk.key} for now. It can be retried later.`
+        );
+    }
 }
 
 // ============================================================================
 // GENERATION WORKER
 // ============================================================================
 
-/**
- * Process the generation queue.
- */
-function processGenerationQueue() {
-
-    if (generationQueue.length === 0) {
-        return;
-    }
+function processActiveChunk() {
 
     const dimension =
         world.getDimension(
             DIMENSION_ID
         );
 
-    // Always prioritize chunks near players.
-    prioritizeQueue(dimension);
-
-    for (
-        let i = 0;
-        i < CHUNKS_PER_TICK &&
-        generationQueue.length > 0;
-        i++
+    /*
+     * Start a new chunk if necessary.
+     */
+    if (
+        activeChunk === null
     ) {
 
-        const chunk =
-            generationQueue.shift();
-
-        if (!chunk) {
-            return;
-        }
-
-        const state =
-            chunkStates.get(
-                chunk.key
-            );
-
-        // Something else already handled this chunk.
-        if (state !== "queued") {
-            continue;
-        }
-
-        chunkStates.set(
-            chunk.key,
-            "generating"
+        beginNextChunk(
+            dimension
         );
 
-        let success = false;
+        return;
+    }
+
+    const chunk =
+        activeChunk;
+
+    // ------------------------------------------------------------------------
+    // WAITING FOR CHUNK
+    // ------------------------------------------------------------------------
+
+    if (
+        chunkStates.get(
+            chunk.key
+        ) === "waiting"
+    ) {
+
+        chunk.waitTicks++;
+
+        /*
+         * Give Minecraft several ticks to actually load the ticking area.
+         */
+        if (
+            chunk.waitTicks >=
+            CHUNK_LOAD_WAIT_TICKS
+        ) {
+
+            chunkStates.set(
+                chunk.key,
+                "generating"
+            );
+
+            console.warn(
+                `[Pulse] Loaded chunk ${chunk.key}, beginning generation`
+            );
+        }
+
+        return;
+    }
+
+    // ------------------------------------------------------------------------
+    // GENERATING
+    // ------------------------------------------------------------------------
+
+    if (
+        chunkStates.get(
+            chunk.key
+        ) === "generating"
+    ) {
 
         try {
 
             /*
-             * Load the chunk before modifying it.
+             * Generate only a few rows this tick.
              */
-            if (
-                !startChunkLoading(
-                    dimension,
-                    chunk.x,
-                    chunk.z
-                )
+            const endRow =
+                Math.min(
+                    16,
+                    chunk.nextRow +
+                    ROWS_PER_TICK
+                );
+
+            for (
+                let row =
+                    chunk.nextRow;
+
+                row < endRow;
+
+                row++
             ) {
-                throw new Error(
-                    "Could not create ticking area"
+
+                generateChunkRow(
+                    dimension,
+                    chunk,
+                    row
                 );
             }
 
+            chunk.nextRow =
+                endRow;
+
             /*
-             * Generate the actual terrain.
+             * All 16 rows are complete.
              */
-            generateChunk(
-                dimension,
-                chunk.x,
-                chunk.z
-            );
+            if (
+                chunk.nextRow >= 16
+            ) {
 
-            success = true;
+                chunkStates.set(
+                    chunk.key,
+                    "verifying"
+                );
 
-            chunkStates.set(
-                chunk.key,
-                "generated"
-            );
+                chunk.verifyTicks = 0;
 
-            console.warn(
-                `[Pulse] Generated chunk ${chunk.key}`
-            );
+                console.warn(
+                    `[Pulse] Finished block placement for ${chunk.key}`
+                );
+            }
 
         } catch (error) {
 
-            /*
-             * IMPORTANT:
-             *
-             * The old generator marked a chunk as generated BEFORE actually
-             * generating it.
-             *
-             * If anything failed, that chunk could therefore remain
-             * permanently broken.
-             *
-             * Here we remove its state so it can be retried.
-             */
-            chunkStates.delete(
-                chunk.key
+            failActiveChunk(
+                dimension,
+                `Generation error: ${error}`
             );
+        }
 
-            /*
-             * Put it back at the END of the queue.
-             */
-            generationQueue.push(
-                chunk
-            );
+        return;
+    }
 
-            console.warn(
-                `[Pulse] Failed to generate chunk ${chunk.key}: ${error}`
-            );
+    // ------------------------------------------------------------------------
+    // VERIFYING
+    // ------------------------------------------------------------------------
 
-        } finally {
+    if (
+        chunkStates.get(
+            chunk.key
+        ) === "verifying"
+    ) {
 
-            stopChunkLoading(
-                dimension
+        chunk.verifyTicks++;
+
+        /*
+         * Give block updates a couple ticks before checking.
+         */
+        if (
+            chunk.verifyTicks <
+            VERIFY_WAIT_TICKS
+        ) {
+            return;
+        }
+
+        try {
+
+            const valid =
+                verifyChunk(
+                    dimension,
+                    chunk
+                );
+
+            if (valid) {
+
+                chunkStates.set(
+                    chunk.key,
+                    "generated"
+                );
+
+                console.warn(
+                    `[Pulse] Chunk ${chunk.key} VERIFIED`
+                );
+
+                removeTickingArea(
+                    dimension
+                );
+
+                activeChunk = null;
+
+            } else {
+
+                failActiveChunk(
+                    dimension,
+                    "Verification failed"
+                );
+            }
+
+        } catch (error) {
+
+            failActiveChunk(
+                dimension,
+                `Verification error: ${error}`
             );
         }
     }
 }
 
 // ============================================================================
-// PLAYER TRACKING
+// PLAYER SCANNING
 // ============================================================================
 
-/**
- * Find all chunks that should exist around every player.
- */
 function scanPlayers() {
 
     const dimension =
@@ -547,11 +785,15 @@ function scanPlayers() {
     const players =
         dimension.getPlayers();
 
-    if (players.length === 0) {
+    if (
+        players.length === 0
+    ) {
         return;
     }
 
-    for (const player of players) {
+    for (
+        const player of players
+    ) {
 
         const playerChunkX =
             worldToChunk(
@@ -581,8 +823,8 @@ function scanPlayers() {
                     GENERATION_RADIUS;
 
                 chunkZ <=
-                    playerChunkZ +
-                    GENERATION_RADIUS;
+                playerChunkZ +
+                GENERATION_RADIUS;
 
                 chunkZ++
             ) {
@@ -594,6 +836,95 @@ function scanPlayers() {
             }
         }
     }
+}
+
+// ============================================================================
+// QUEUE PRIORITIZATION
+// ============================================================================
+
+function prioritizeQueue() {
+
+    if (
+        generationQueue.length < 2
+    ) {
+        return;
+    }
+
+    const dimension =
+        world.getDimension(
+            DIMENSION_ID
+        );
+
+    const players =
+        dimension.getPlayers();
+
+    if (
+        players.length === 0
+    ) {
+        return;
+    }
+
+    generationQueue.sort(
+        (a, b) => {
+
+            let distanceA =
+                Infinity;
+
+            let distanceB =
+                Infinity;
+
+            for (
+                const player
+                of players
+            ) {
+
+                const playerChunkX =
+                    worldToChunk(
+                        player.location.x
+                    );
+
+                const playerChunkZ =
+                    worldToChunk(
+                        player.location.z
+                    );
+
+                const ax =
+                    a.x -
+                    playerChunkX;
+
+                const az =
+                    a.z -
+                    playerChunkZ;
+
+                const bx =
+                    b.x -
+                    playerChunkX;
+
+                const bz =
+                    b.z -
+                    playerChunkZ;
+
+                distanceA =
+                    Math.min(
+                        distanceA,
+                        ax * ax +
+                        az * az
+                    );
+
+                distanceB =
+                    Math.min(
+                        distanceB,
+                        bx * bx +
+                        bz * bz
+                    );
+            }
+
+            return (
+                distanceA -
+                distanceB
+            );
+        }
+    );
 }
 
 // ============================================================================
@@ -609,17 +940,17 @@ system.beforeEvents.startup.subscribe(
             );
 
         console.warn(
-            `[Pulse] Registered dimension ${DIMENSION_ID}`
+            `[Pulse] Registered ${DIMENSION_ID}`
         );
     }
 );
 
 // ============================================================================
-// START GENERATION SYSTEM
+// START SYSTEMS
 // ============================================================================
 
 /*
- * Check for players every 0.5 seconds.
+ * Discover chunks around players.
  */
 system.runInterval(
     scanPlayers,
@@ -627,23 +958,25 @@ system.runInterval(
 );
 
 /*
- * Process the generation queue every tick.
+ * Reorder the queue frequently so moving players get priority.
  */
 system.runInterval(
-    processGenerationQueue,
+    prioritizeQueue,
+    10
+);
+
+/*
+ * The generator state machine runs every tick.
+ */
+system.runInterval(
+    processActiveChunk,
     1
 );
 
 // ============================================================================
-// DIMENSION ENTRY
+// PLAYER ENTERS DIMENSION
 // ============================================================================
 
-/*
- * When a player enters Pulse, immediately queue a 3x3 area around them.
- *
- * The normal player scanner will then expand that area to the configured
- * generation radius.
- */
 world.afterEvents.playerDimensionChange.subscribe(
     (event) => {
 
@@ -657,45 +990,40 @@ world.afterEvents.playerDimensionChange.subscribe(
         const player =
             event.player;
 
-        const playerChunkX =
+        const chunkX =
             worldToChunk(
                 player.location.x
             );
 
-        const playerChunkZ =
+        const chunkZ =
             worldToChunk(
                 player.location.z
             );
 
+        /*
+         * Immediately prioritize the 3x3 area around the player.
+         */
         for (
-            let chunkX =
-                playerChunkX - 1;
-
-            chunkX <=
-                playerChunkX + 1;
-
-            chunkX++
+            let x = chunkX - 1;
+            x <= chunkX + 1;
+            x++
         ) {
 
             for (
-                let chunkZ =
-                    playerChunkZ - 1;
-
-                chunkZ <=
-                    playerChunkZ + 1;
-
-                chunkZ++
+                let z = chunkZ - 1;
+                z <= chunkZ + 1;
+                z++
             ) {
 
                 queueChunk(
-                    chunkX,
-                    chunkZ
+                    x,
+                    z
                 );
             }
         }
 
         console.warn(
-            `[Pulse] Player entered dimension. Starting local generation around ${playerChunkX},${playerChunkZ}`
+            `[Pulse] Player entered ${DIMENSION_ID} at chunk ${chunkX},${chunkZ}`
         );
     }
 );
