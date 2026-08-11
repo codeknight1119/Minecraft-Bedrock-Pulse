@@ -1,5 +1,5 @@
 import { system, world } from "@minecraft/server";
-
+import { TerrainNoise } from "./noiseGenClass.js"
 /*
  * ============================================================================
  * PULSE CUSTOM DIMENSION GENERATOR
@@ -177,32 +177,12 @@ function queueChunk(chunkX, chunkZ) {
  * This is deliberately isolated so we can later replace it with proper
  * terrain noise / biome generation.
  */
+const test_seed = Math.floor(Math.random() * 10000)
+const terrainGen = new TerrainNoise(test_seed)
+
+
 function getTerrainHeight(x, z) {
-
-    const largeScale =
-        Math.sin(x * 0.045) * 5;
-
-    const mediumScale =
-        Math.cos(z * 0.065) * 4;
-
-    const smallScale =
-        Math.sin((x + z) * 0.11) * 2;
-
-    const height =
-        Math.round(
-            BASE_HEIGHT +
-            largeScale +
-            mediumScale +
-            smallScale
-        );
-
-    return Math.max(
-        MIN_HEIGHT,
-        Math.min(
-            MAX_HEIGHT,
-            height
-        )
-    );
+return terrainGen.noise2D(x,z)
 }
 
 // ============================================================================
