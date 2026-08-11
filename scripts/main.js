@@ -178,11 +178,15 @@ function queueChunk(chunkX, chunkZ) {
  * terrain noise / biome generation.
  */
 const test_seed = Math.floor(Math.random() * 10000)
-const terrainGen = new TerrainNoise(test_seed)
-
+const terrainGen = new TerrainNoise(test_seed, 0.02);
 
 function getTerrainHeight(x, z) {
-return terrainGen.noise2D(x,z)
+    const noise = terrainGen.noise2D(x, z);
+
+    return Math.round(
+        BASE_HEIGHT +
+        noise * 16
+    );
 }
 
 // ============================================================================
