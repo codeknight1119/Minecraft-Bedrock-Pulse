@@ -266,10 +266,6 @@ function queueChunk(chunkX, chunkZ) {
 const test_seed = Math.floor(Math.random() * 10000)
 const terrainGen = new TerrainNoise(test_seed, 0.02);
 
-<<<<<<< HEAD
- 
-=======
->>>>>>> 1d06919fbfbafa7cf4bd253b56a516d48eba8519
 function getTerrainHeight(x, z) {
     const noise = terrainGen.noise2D(x, z);
 
@@ -355,12 +351,27 @@ function createTickingArea(
  *
  * We do NOT generate all 256 columns at once.
  */
+
+const TempMap = new TerrainNoise(Math.floor(Math.random() * 1000))
+
 function generateChunkRow(
     dimension,
     chunk,
     localZ
 ) {
 
+    let currentBiome = null
+    let searchDone = false
+    const tempNoiseVal = TempMap.noise2D(chunk.x, chunk.z)
+    biomes.forEach(biome => {
+        if(biome.minTemperature < tempNoiseVal && tempNoiseVal < biome.maxTemperature ){
+            searchDone = Math.random() > 0.5 ? true : false
+            currentBiome = biome
+            if(searchDone){
+                break
+            }
+        }
+    });
     const startX =
         chunkToWorld(chunk.x);
 
@@ -393,15 +404,14 @@ function generateChunkRow(
         ) {
 
             dimension.runCommand(
-                `fill ${worldX} ${BASE_HEIGHT} ${worldZ} ${worldX} ${height - 3} ${worldZ} stone`
+                `fill ${worldX} ${BASE_HEIGHT} ${worldZ} ${worldX} ${height - 3} ${worldZ} ${biome.subsurfaceBlock}`
             );
         }
-
         /*
          * Dirt layer.
          */
         dimension.runCommand(
-            `fill ${worldX} ${height - 2} ${worldZ} ${worldX} ${height - 1} ${worldZ} dirt`
+            `fill ${worldX} ${height - 2} ${worldZ} ${worldX} ${height - 1} ${worldZ} ${biome.surfaceBlock}`
         );
 
         /*
