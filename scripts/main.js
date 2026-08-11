@@ -1,5 +1,5 @@
 import { system, world } from "@minecraft/server";
-import { TerrainNoise } from "./noiseGenClass.js"
+import {Biome} from "./Biome.js"
 /*
  * ============================================================================
  * PULSE CUSTOM DIMENSION GENERATOR
@@ -119,6 +119,92 @@ const TICKING_AREA_NAME = "pulse_generator_area";
 
 let tickingAreaActive = false;
 
+//Biomes
+const B_plains = new Biome({
+    name: "Plains",
+
+    minTemperature: 0.4,
+    maxTemperature: 0.7,
+
+    minHumidity: 0.3,
+    maxHumidity: 0.7,
+
+    surfaceBlock: "grass_block",
+    subsurfaceBlock: "dirt"
+});
+
+// 1. A chilly, high-altitude spruce forest
+const B_frozenTaiga = new Biome({
+    name: "Frozen Taiga",
+
+    minTemperature: -0.5,
+    maxTemperature: 0.1,
+
+    minHumidity: 0.4,
+    maxHumidity: 0.8,
+
+    surfaceBlock: "snow_block",
+    subsurfaceBlock: "coarse_dirt"
+});
+
+// 2. A dark, mystical sculk-infested wasteland
+const B_deepDarkBarrens = new Biome({
+    name: "Deep Dark Barrens",
+
+    minTemperature: 0.2,
+    maxTemperature: 0.5,
+
+    minHumidity: 0.1,
+    maxHumidity: 0.4,
+
+    surfaceBlock: "sculk",
+    subsurfaceBlock: "deepslate"
+});
+
+// 3. A fiery, volcanic badlands concept
+const B_obsidianCrag = new Biome({
+    name: "Obsidian Crag",
+
+    minTemperature: 0.8,
+    maxTemperature: 1.0,
+
+    minHumidity: 0.0,
+    maxHumidity: 0.2,
+
+    surfaceBlock: "basalt",
+    subsurfaceBlock: "blackstone"
+});
+
+// 4. An eerie, nether-like corruption spreading on the surface
+const B_crimsonHollow = new Biome({
+    name: "Crimson Hollow",
+
+    minTemperature: 0.7,
+    maxTemperature: 0.9,
+
+    minHumidity: 0.5,
+    maxHumidity: 0.9,
+
+    surfaceBlock: "crimson_nylium",
+    subsurfaceBlock: "netherrack"
+});
+
+// 5. A lush, subterranean-themed crystal field
+const B_amethystGlade = new Biome({
+    name: "Amethyst Glade",
+
+    minTemperature: 0.3,
+    maxTemperature: 0.6,
+
+    minHumidity: 0.6,
+    maxHumidity: 0.9,
+
+    surfaceBlock: "moss_block",
+    subsurfaceBlock: "smooth_basalt"
+});
+
+const biomes = [B_amethystGlade, B_crimsonHollow, B_deepDarkBarrens, B_frozenTaiga, B_obsidianCrag, B_plains]
+
 // ============================================================================
 // CHUNK UTILITIES
 // ============================================================================
@@ -180,6 +266,10 @@ function queueChunk(chunkX, chunkZ) {
 const test_seed = Math.floor(Math.random() * 10000)
 const terrainGen = new TerrainNoise(test_seed, 0.02);
 
+<<<<<<< HEAD
+ 
+=======
+>>>>>>> 1d06919fbfbafa7cf4bd253b56a516d48eba8519
 function getTerrainHeight(x, z) {
     const noise = terrainGen.noise2D(x, z);
 
@@ -610,12 +700,11 @@ function processActiveChunk() {
                 chunk.key,
                 "generating"
             );
-
+/*
             console.warn(
                 `[Pulse] Loaded chunk ${chunk.key}, beginning generation`
-            );
+            );*/
         }
-
         return;
     }
 
@@ -673,11 +762,11 @@ function processActiveChunk() {
                 );
 
                 chunk.verifyTicks = 0;
-
+/*
                 console.warn(
                     `[Pulse] Finished block placement for ${chunk.key}`
                 );
-            }
+*/            }
 
         } catch (error) {
 
@@ -726,11 +815,11 @@ function processActiveChunk() {
                     chunk.key,
                     "generated"
                 );
-
+/*
                 console.warn(
                     `[Pulse] Chunk ${chunk.key} VERIFIED`
                 );
-
+*/
                 removeTickingArea(
                     dimension
                 );
