@@ -1,7 +1,9 @@
-export let structures = [
+export const structures = [
     {
         name: "cdt:flower_lava",
         rarity: 0.65,
-        structure_path: "/cdt/AG_tree.mcstructure"
+        frequency: 0.08,
+        cellSize: 8,
+        structure_path: "cdt:AG_tree"
     }
-]
+];

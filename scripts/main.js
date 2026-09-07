@@ -1,6 +1,8 @@
 import { system, world } from "@minecraft/server";
 import { Biome } from "./biome.js";
 import { TerrainNoise } from "./TerrainGenerator.js";
+import { FeatureGenerator } from "./FeatureGenerator.js";
+import { structures } from "../structures/sturctures_manifest.js";
 
 /*
  * ============================================================================
@@ -61,14 +63,40 @@ const MAX_HEIGHT = 72;
  * This is temporary while we experiment. Later this should come from the
  * WorldGenerator configuration.
  */
-let WORLD_SEED;
-if(!world.getDynamicProperty("seed:"+DIMENSION_ID)){
-    WORLD_SEED = Math.floor(Math.random() * 1000000);
-    world.setDynamicProperty("seed:"+DIMENSION_ID)
-}else{
-    WORLD_SEED = world.getDynamicProperty("seed:"+DIMENSION_ID);
-}
+const WORLD_SEED_KEY =
+    "seed:" + DIMENSION_ID;
 
+const savedWorldSeed =
+    world.getDynamicProperty(
+        WORLD_SEED_KEY
+    );
+
+let WORLD_SEED;
+
+if (savedWorldSeed === undefined) {
+
+    WORLD_SEED =
+        Math.floor(
+            Math.random() * 1000000000
+        );
+
+    world.setDynamicProperty(
+        WORLD_SEED_KEY,
+        WORLD_SEED
+    );
+
+    console.warn(
+        `[Pulse] Created world seed: ${WORLD_SEED}`
+    );
+
+} else {
+
+    WORLD_SEED = savedWorldSeed;
+
+    console.warn(
+        `[Pulse] Loaded world seed: ${WORLD_SEED}`
+    );
+}
 
 const terrainGen = new TerrainNoise(WORLD_SEED, 0.02);
 
@@ -85,6 +113,16 @@ const humidityMap = new TerrainNoise(WORLD_SEED + 2000, 0.004);
  * temperature/humidity ranges to produce different biomes.
  */
 const biomeSelectionMap = new TerrainNoise(WORLD_SEED + 3000, 0.01);
+
+/*
+ * Terrain features use independent deterministic noise maps derived from the
+ * persistent world seed and each feature name.
+ */
+const featureGenerator =
+    new FeatureGenerator(
+        WORLD_SEED,
+        structures
+    );
 
 // ============================================================================
 // GENERATOR STATE
@@ -108,7 +146,10 @@ const B_plains = new Biome({
     minHumidity: 0.3,
     maxHumidity: 0.7,
     surfaceBlock: "grass_block",
-    subsurfaceBlock: "dirt"
+    subsurfaceBlock: "dirt",
+    terrainFeatures: [
+        "cdt:flower_lava"
+    ]
 });
 
 const B_frozenTaiga = new Biome({
@@ -408,6 +449,70 @@ function generateChunkRow(dimension, chunk, localZ) {
 }
 
 // ============================================================================
+// TERRAIN FEATURES
+// ============================================================================
+
+function generateChunkFeatures(
+    dimension,
+    chunk
+) {
+
+    const candidates =
+        featureGenerator.getChunkCandidates(
+            chunk.x,
+            chunk.z
+        );
+
+    for (const candidate of candidates) {
+
+        const biome =
+            getBiome(
+                candidate.x,
+                candidate.z
+            );
+
+        if (
+            !biome.terrainFeatures.includes(
+                candidate.structure.name
+            )
+        ) {
+            continue;
+        }
+
+        const height =
+            getTerrainHeight(
+                candidate.x,
+                candidate.z
+            );
+
+        try {
+
+            /*
+             * StructureManager can place a behavior-pack .mcstructure directly
+             * by identifier. The candidate position is deterministic, while the
+             * height is matched to the generated terrain.
+             */
+            world.structureManager.place(
+                candidate.structure.structure_path,
+                dimension,
+                {
+                    x: candidate.x,
+                    y: height + 1,
+                    z: candidate.z
+                }
+            );
+
+        } catch (error) {
+
+            console.warn(
+                `[Pulse] Failed to place feature ${candidate.structure.name} at ${candidate.x},${candidate.z}: ${error}`
+            );
+
+        }
+    }
+}
+
+// ============================================================================
 // CHUNK VERIFICATION
 // ============================================================================
 
@@ -595,7 +700,22 @@ function processActiveChunk() {
             chunk.nextRow = endRow;
 
             if (chunk.nextRow >= 16) {
-                chunkStates.set(chunk.key, "verifying");
+
+                /*
+                 * Terrain is complete before any structures are placed.
+                 * This prevents feature placement from interfering with
+                 * the row-by-row terrain generator.
+                 */
+                generateChunkFeatures(
+                    dimension,
+                    chunk
+                );
+
+                chunkStates.set(
+                    chunk.key,
+                    "verifying"
+                );
+
                 chunk.verifyTicks = 0;
             }
 
