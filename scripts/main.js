@@ -61,7 +61,14 @@ const MAX_HEIGHT = 72;
  * This is temporary while we experiment. Later this should come from the
  * WorldGenerator configuration.
  */
-const WORLD_SEED = Math.floor(Math.random() * 1000000);
+let WORLD_SEED;
+if(!world.getDynamicProperty("seed:"+DIMENSION_ID)){
+    WORLD_SEED = Math.floor(Math.random() * 1000000);
+    world.setDynamicProperty("seed:"+DIMENSION_ID)
+}else{
+    WORLD_SEED = world.getDynamicProperty("seed:"+DIMENSION_ID);
+}
+
 
 const terrainGen = new TerrainNoise(WORLD_SEED, 0.02);
 
