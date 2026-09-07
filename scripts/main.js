@@ -148,7 +148,8 @@ const B_plains = new Biome({
     surfaceBlock: "grass_block",
     subsurfaceBlock: "dirt",
     terrainFeatures: [
-        "cdt:flower_lava"
+        "cdt:lava_tree",
+        "cdt:white_tree"
     ]
 });
 
