@@ -6,18 +6,17 @@ export class Biome {
         minHumidity,
         maxHumidity,
         surfaceBlock,
-        subsurfaceBlock
+        subsurfaceBlock,
+        terrainFeatures = []
     }) {
         this.name = name;
-
         this.minTemperature = minTemperature;
         this.maxTemperature = maxTemperature;
-
         this.minHumidity = minHumidity;
         this.maxHumidity = maxHumidity;
-
         this.surfaceBlock = surfaceBlock;
         this.subsurfaceBlock = subsurfaceBlock;
+        this.terrainFeatures = terrainFeatures;
     }
 
     matches(temperature, humidity) {
